@@ -172,7 +172,7 @@ pub fn ee_terms_log(l: SubLevel, mut log: impl Write) -> Result<Vec<TermType>, s
             name,
             ml,
             if ms & 1 == 0 {
-                ms.to_string()
+                (ms / 2).to_string()
             } else {
                 format!("{}/2", ms)
             }
