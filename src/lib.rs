@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
@@ -28,6 +29,7 @@ impl SubLevelType {
 
 impl Display for SubLevelType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = format!("(L={})", self.0);
         f.write_str(match self.0 {
             0 => "s",
             1 => "p",
@@ -36,7 +38,7 @@ impl Display for SubLevelType {
             4 => "g",
             5 => "h",
             6 => "i",
-            _ => "(ORBITALS GO BRRRR)",
+            _ => &s,
         })
     }
 }
@@ -73,6 +75,7 @@ struct TermMomentum(usize);
 
 impl Display for TermMomentum {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = format!("(L={})", self.0);
         f.write_str(match self.0 {
             0 => "S",
             1 => "P",
@@ -81,7 +84,7 @@ impl Display for TermMomentum {
             4 => "G",
             5 => "H",
             6 => "I",
-            _ => "(MOMENTUM GO BRRRR)",
+            _ => &s,
         })
     }
 }
@@ -99,95 +102,100 @@ impl Display for TermType {
 }
 
 pub fn ee_terms(l: SubLevel) -> Result<Vec<TermType>, std::io::Error> {
-    ee_terms_log(l, sink())
+    ee_terms_log(l, sink)
 }
 
 static SEPARATOR: &[u8] = " ----- \n".as_bytes();
 static SPINS: [i8; 2] = [-1, 1]; // SPINS ARE DOUBLED IN THE CODE!!!!!
 
-pub fn ee_terms_log(l: SubLevel, mut log: impl Write) -> Result<Vec<TermType>, std::io::Error> {
-    writeln!(log, "Sublevel: {l}")?;
-    log.write(SEPARATOR)?;
-    writeln!(log, "Single electron states (ml, ms)")?;
-    let mut single_states: Vec<(i8, i8)> = Vec::new();
-    let mut sn = 1;
-    for ml in l.tp.mls() {
-        for ms in SPINS {
-            writeln!(log, "{}: ({}, {}/2)", sn, ml, ms)?;
-            single_states.push((ml, ms));
-            sn += 1;
-        }
-    }
-    let single_states_num = sn - 1;
+pub fn ee_terms_log<W: Write>(
+    l: SubLevel,
+    log: impl Fn() -> W,
+) -> Result<Vec<TermType>, std::io::Error> {
+    writeln!(log(), "Sublevel: {l}")?;
+    log().write(SEPARATOR)?;
 
-    log.write(SEPARATOR)?;
-    writeln!(log, "Level states")?;
-    fn backtrack(
-        ind: usize,
-        iterator: &mut Vec<usize>,
-        min: usize,
-        max: usize,
-        level_states: &mut Vec<(String, i8, i8)>,
-        single_states: &[(i8, i8)],
-    ) {
-        if ind == iterator.len() {
-            let state = iterator.iter().fold((String::new(), 0, 0), |acc, &next| {
-                (
-                    format!("{}{} ", acc.0, next + 1),
-                    acc.1 + single_states[next].0,
-                    acc.2 + single_states[next].1,
-                )
+    let single_states =
+        l.tp.mls()
+            .into_iter()
+            .cartesian_product(SPINS)
+            .collect_vec();
+    let single_states_num = single_states.len();
+    writeln!(log(), "Single electron states ({single_states_num} total)")?;
+    single_states
+        .iter()
+        .enumerate()
+        .map(|(i, (ml, ms))| writeln!(log(), "{i}: ({ml}, {ms}/2)"))
+        .try_collect()?;
+    log().write(SEPARATOR)?;
+
+    let level_states = (0..single_states_num)
+        .combinations(l.electrons as usize)
+        .map(|state| {
+            let mut repr = (String::new(), 0, 0);
+            state.into_iter().for_each(|next| {
+                repr.0.push_str(&format!("{} ", next + 1));
+                repr.1 += single_states[next].0;
+                repr.2 += single_states[next].1;
             });
-            level_states.push(state);
-            return;
-        }
-        for val in min..max {
-            iterator[ind] = val;
-            backtrack(
-                ind + 1,
-                iterator,
-                val + 1,
-                max + 1,
-                level_states,
-                single_states,
-            );
-        }
-    }
+            repr
+        })
+        .collect_vec();
+    writeln!(log(), "Level states")?;
+    writeln!(log(), "({} total)", level_states.len())?;
+    level_states
+        .iter()
+        .map(|(name, ml, ms)| {
+            writeln!(
+                log(),
+                "{}: ({}, {})",
+                name,
+                ml,
+                if ms & 1 == 0 {
+                    (ms / 2).to_string()
+                } else {
+                    format!("{}/2", ms)
+                }
+            )
+        })
+        .try_collect()?;
+    log().write(SEPARATOR)?;
 
-    let mut level_states = Vec::new();
-    backtrack(
-        0,
-        &mut (0..l.electrons as usize).collect(),
-        0,
-        single_states_num + 1 - (l.electrons as usize),
-        &mut level_states,
-        single_states.as_slice(),
-    );
+    // Here's a fancy approach with itertool's groups, but it ends up with some states lost for some reason :idk:
+    /*
+    let mut sorted_states: BTreeMap<i8, BTreeMap<i8, Vec<String>>> = level_states
+        .into_iter()
+        .group_by(|(_, ml, _)| *ml)
+        .into_iter()
+        .map(|(ml, l_states)| {
+            (
+                ml,
+                l_states
+                    .into_iter()
+                    .group_by(|(_, _, ms)| *ms)
+                    .into_iter()
+                    .map(|(ms, ls_states)| {
+                        (
+                            ms,
+                            ls_states.into_iter().map(|(name, _, _)| name).collect_vec(),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+     */
     let mut sorted_states: BTreeMap<i8, BTreeMap<i8, Vec<String>>> = BTreeMap::new();
-    writeln!(log, "({} total)", level_states.len())?;
-    for (name, ml, ms) in level_states {
-        writeln!(
-            log,
-            "{}: ({}, {})",
-            name,
-            ml,
-            if ms & 1 == 0 {
-                (ms / 2).to_string()
-            } else {
-                format!("{}/2", ms)
-            }
-        )?;
-
+    level_states.into_iter().for_each(|(name, ml, ms)| {
         sorted_states
             .entry(ml)
             .or_default()
             .entry(ms)
             .or_default()
             .push(name);
-    }
+    });
 
-    log.write(SEPARATOR)?;
-    writeln!(log, "Terms:")?;
+    writeln!(log(), "Terms:")?;
     let mut term_states: HashMap<TermType, Vec<String>> = HashMap::new();
     while let Some((&l, _)) = sorted_states.last_key_value() {
         let l_states = sorted_states
@@ -200,7 +208,7 @@ pub fn ee_terms_log(l: SubLevel, mut log: impl Write) -> Result<Vec<TermType>, s
             momentum: TermMomentum(l.try_into().expect("Max momentum must be nonnegative!")),
             multiplet: (s + 1).try_into().expect("Max spin must be nonnegative!"), // SPIN IS DOUBLED!
         };
-        writeln!(log, "{term}")?;
+        writeln!(log(), "{term}")?;
         let this_term_states = term_states.entry(term).or_default();
 
         for l in -l..=l {
@@ -214,7 +222,7 @@ pub fn ee_terms_log(l: SubLevel, mut log: impl Write) -> Result<Vec<TermType>, s
                 let this_state = sl_states
                     .pop()
                     .expect("Should be at least one state, will be enforced now");
-                writeln!(log, "- {this_state}")?;
+                writeln!(log(), "- {this_state}")?;
                 this_term_states.push(this_state);
                 if sl_states.is_empty() {
                     l_states.remove_entry(&s);
@@ -231,4 +239,18 @@ pub fn ee_terms_log(l: SubLevel, mut log: impl Write) -> Result<Vec<TermType>, s
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::ee_terms_log;
+
+    #[test]
+    fn it_works() {
+        ee_terms_log(
+            crate::SubLevel {
+                tp: crate::SubLevelType(1),
+                electrons: 3,
+            },
+            std::io::stdout,
+        )
+        .expect("Should be ok");
+    }
+}

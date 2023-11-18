@@ -19,7 +19,7 @@ pub fn main() {
     let level_type = SubLevelType(config.orbital);
     let level = SubLevel::new(level_type, config.electrons).unwrap();
     let terms = if config.verbose {
-        ee_terms_log(level, std::io::stdout())
+        ee_terms_log(level, std::io::stdout)
     } else {
         ee_terms(level)
     }
